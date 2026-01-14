@@ -160,19 +160,11 @@ func (d *DAG) executeNodes(ctx context.Context) error {
 				semaphore <- struct{}{}
 				defer func() { <-semaphore }()
 
-				if d.verbose {
-					fmt.Printf("[DAG] 执行节点: %s (%s)\n", n.Name, n.ID)
-				}
-
 				// 在执行前，将依赖节点的输出作为输入
 				d.prepareDependencyOutputs(n)
 
 				if err := n.Execute(ctx); err != nil {
 					errChan <- err
-				} else {
-					if d.verbose {
-						fmt.Printf("[DAG] 节点完成: %s (%s)\n", n.Name, n.ID)
-					}
 				}
 			}(node)
 		}

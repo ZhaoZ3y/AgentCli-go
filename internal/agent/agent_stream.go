@@ -13,8 +13,8 @@ func (a *Agent) ProcessRequestStream(ctx context.Context, userInput string, onCh
 		a.logger.ThinkingProcess("开始处理", "用户输入: "+userInput)
 	}
 	
-	// 第一步：分析用户意图（静默模式）
-	intention, err := a.analyzeIntention(ctx, userInput)
+	// 第一步：分析用户意图（带思考过程显示）
+	intention, err := a.analyzeIntentionWithContext(ctx, userInput)
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Error("分析意图失败", err, nil)
@@ -26,7 +26,7 @@ func (a *Agent) ProcessRequestStream(ctx context.Context, userInput string, onCh
 		a.logger.ThinkingProcess("意图分析", intention)
 	}
 
-	// 第二步：使用DAG进行深度思考和规划（静默模式）
+	// 第二步：使用DAG进行深度思考和规划
 	result, err := a.executeWithDAGStream(ctx, userInput, intention, onChunk)
 	if err != nil {
 		if a.logger != nil {

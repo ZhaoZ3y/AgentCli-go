@@ -124,6 +124,125 @@ func (a *Agent) analyzeIntention(ctx context.Context, userInput string) (string,
 	return a.llmClient.SimpleQuery(ctx, prompt)
 }
 
+// analyzeIntentionWithContext 分析用户意图并智能读取相关文件
+func (a *Agent) analyzeIntentionWithContext(ctx context.Context, userInput string) (string, error) {
+	// 显示思考过程
+	fmt.Print("\n💭 thinking: ")
+	
+	// 第一步：分析用户意图 - 先获取完整的JSON响应
+	prompt := fmt.Sprintf(`分析用户意图并判断需要什么操作。
+
+用户请求：%s
+
+请简洁回答以下问题（JSON格式）：
+{
+  "intent": "用户想要做什么",
+  "need_code_analysis": true/false,
+  "need_image_analysis": true/false,
+  "target_files": ["如果需要分析代码，列出可能相关的文件路径或模式"],
+  "target_images": ["如果需要分析图片，列出图片路径"]
+}`, userInput)
+
+	response, err := a.llmClient.SimpleQuery(ctx, prompt)
+	if err != nil {
+		return "", err
+	}
+
+	// 解析意图
+	var analysisResult struct {
+		Intent            string   `json:"intent"`
+		NeedCodeAnalysis  bool     `json:"need_code_analysis"`
+		NeedImageAnalysis bool     `json:"need_image_analysis"`
+		TargetFiles       []string `json:"target_files"`
+		TargetImages      []string `json:"target_images"`
+	}
+
+	// 尝试从响应中提取JSON
+	jsonStr := extractJSON(response)
+	if err := json.Unmarshal([]byte(jsonStr), &analysisResult); err != nil {
+		// 如果解析失败，显示原始响应并返回
+		fmt.Printf("%s\n\n", response)
+		return response, nil
+	}
+
+	// 流式输出intent内容（模拟打字效果）
+	intentText := analysisResult.Intent
+	for _, char := range intentText {
+		fmt.Print(string(char))
+		time.Sleep(20 * time.Millisecond) // 模拟流式输出效果
+	}
+	fmt.Print("\n\n")
+
+	// 构建意图摘要
+	intentSummary := analysisResult.Intent
+
+	// 如果需要分析代码文件，将文件信息融入到意图描述中
+	if analysisResult.NeedCodeAnalysis && len(analysisResult.TargetFiles) > 0 {
+		// 过滤掉空字符串
+		var validFiles []string
+		for _, f := range analysisResult.TargetFiles {
+			if f != "" {
+				validFiles = append(validFiles, f)
+			}
+		}
+		
+		if len(validFiles) > 0 {
+			intentSummary += "，需要分析以下代码文件: " + strings.Join(validFiles, ", ")
+			
+			// 实际读取文件
+			readFileTool, err := a.toolRegistry.Get("read_file")
+			if err == nil {
+				for _, filePath := range validFiles {
+					result, err := readFileTool.Execute(ctx, map[string]interface{}{
+						"path": filePath,
+					})
+					if err == nil {
+						if a.logger != nil {
+							a.logger.ThinkingProcess("读取代码文件", fmt.Sprintf("文件: %s", filePath))
+						}
+						intentSummary += fmt.Sprintf("\n  - 已读取: %s", filePath)
+					}
+					_ = result
+				}
+			}
+		}
+	}
+
+	// 如果需要分析图片，将图片信息融入到意图描述中
+	if analysisResult.NeedImageAnalysis && len(analysisResult.TargetImages) > 0 {
+		// 过滤掉空字符串
+		var validImages []string
+		for _, img := range analysisResult.TargetImages {
+			if img != "" {
+				validImages = append(validImages, img)
+			}
+		}
+		
+		if len(validImages) > 0 {
+			intentSummary += "，需要分析以下图片: " + strings.Join(validImages, ", ")
+			
+			// 实际识别图片
+			recognizeTool, err := a.toolRegistry.Get("recognize_image")
+			if err == nil {
+				for _, imagePath := range validImages {
+					result, err := recognizeTool.Execute(ctx, map[string]interface{}{
+						"path": imagePath,
+					})
+					if err == nil {
+						if a.logger != nil {
+							a.logger.ThinkingProcess("识别图片", fmt.Sprintf("图片: %s", imagePath))
+						}
+						intentSummary += fmt.Sprintf("\n  - 已识别: %s", imagePath)
+					}
+					_ = result
+				}
+			}
+		}
+	}
+
+	return intentSummary, nil
+}
+
 // executeWithDAG 使用DAG执行任务
 func (a *Agent) executeWithDAG(ctx context.Context, userInput, intention string) (string, error) {
 	// 创建DAG

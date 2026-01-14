@@ -64,33 +64,31 @@ dag:
 
 ## 🎯 使用方法
 
-### 1. 单次对话模式 (Chat)
+### 交互式模式（默认）
 
 ```bash
-# 基本用法
-./agentcli chat "你的问题"
+# 直接启动（默认进入交互式模式）
+./agentcli
 
 # 指定模型
-./agentcli chat -m gpt-3.5-turbo "你的问题"
+./agentcli -m gpt-3.5-turbo
 
 # 指定用户ID
-./agentcli --user myname chat "你的问题"
+./agentcli --user myname
+
+# 设置定制化记忆
+./agentcli --memory "你是一个Go语言专家"
 ```
 
 **特点**:
+- 默认启动即进入交互式模式
 - 流式输出响应
 - 自动保存对话历史
 - 完整日志记录
 - 支持深度思考和工具调用
-
-### 2. 交互式模式 (Interactive)
-
-```bash
-# 启动交互式模式
-./agentcli interactive
-
-# 或使用简写
-./agentcli i
+- 智能分析用户意图（使用"thinking"显示思考过程）
+- 自动分析项目代码文件
+- 自动识别和分析图片
 ```
 
 **交互式命令**:
@@ -252,16 +250,15 @@ dag:
 - `-c, --config`: 配置文件路径
 - `-u, --user`: 用户ID
 - `-s, --session`: 会话ID
+- `-m, --model`: 指定模型
+- `--memory`: 设置Agent定制化记忆
 - `-h, --help`: 帮助信息
 
 ### 命令
-- `chat`: 单次对话
-- `interactive` (别名: `i`, `repl`): 交互式模式
 - `version`: 显示版本信息
 - `help`: 帮助信息
 
-### Chat命令标志
-- `-m, --model`: 指定模型
+注意：默认启动即进入交互式模式，无需额外命令。
 
 ## 🎯 使用场景
 

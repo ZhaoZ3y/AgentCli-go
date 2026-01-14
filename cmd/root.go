@@ -39,6 +39,10 @@ var rootCmd = &cobra.Command{
   - 执行命令 (execute_command)
 
 通过API Key连接大语言模型，智能理解用户意图并自动调用相应工具完成任务。`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// 默认启动交互式模式
+		return runInteractive()
+	},
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		// 加载配置
 		var err error
@@ -77,6 +81,15 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("初始化日志失败: %w", err)
 		}
 
+		// 加载持久化的memory（如果命令行没有指定）
+		if memory == "" {
+			loadedMemory, err := agent.LoadMemoryFromFile(userID)
+			if err == nil && loadedMemory != "" {
+				memory = loadedMemory
+				fmt.Printf("📝 已加载定制化记忆: %s\n", memory)
+			}
+		}
+
 		return nil
 	},
 	PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
@@ -97,59 +110,93 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "配置文件路径 (默认: ./configs/config.yaml)")
 	rootCmd.PersistentFlags().StringVarP(&userID, "user", "u", "", "用户ID（用于历史记录）")
 	rootCmd.PersistentFlags().StringVarP(&sessionID, "session", "s", "", "会话ID")
-
-	// chat命令参数
-	chatCmd.Flags().StringVarP(&chatModel, "model", "m", "", "指定使用的模型")
+	rootCmd.PersistentFlags().StringVarP(&chatModel, "model", "m", "", "指定使用的模型")
+	rootCmd.PersistentFlags().StringVarP(&memory, "memory", "", "", "Agent定制化记忆")
 	
 	// 添加子命令
-	rootCmd.AddCommand(chatCmd)
-	rootCmd.AddCommand(interactiveCmd)
 	rootCmd.AddCommand(versionCmd)
 }
 
-// chatCmd 单次对话命令（流式输出）
-var chatCmd = &cobra.Command{
-	Use:   "chat [问题]",
-	Short: "进行单次对话（流式输出）",
-	Long:  "向Agent提出一个问题并获得回答，支持流式输出和历史记录",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		question := strings.Join(args, " ")
+// runInteractive 运行交互式模式
+func runInteractive() error {
+	model := cfg.API.Model
+	if chatModel != "" {
+		model = chatModel
+	}
+	
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("🤖 AgentCLI - 交互式模式\n")
+	fmt.Printf("📦 模型: %s\n", model)
+	fmt.Printf("👤 用户: %s\n", userID)
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("提示:\n")
+	fmt.Printf("  - 输入 'exit' 或 'quit' 退出\n")
+	fmt.Printf("  - 输入 '/new' 开始新对话\n")
+	fmt.Printf("  - 输入 '/model' 切换模型\n")
+	fmt.Printf("  - 输入 '/history' 查看历史对话\n")
+	fmt.Printf("  - 输入 '/load <id>' 加载历史对话\n")
+	fmt.Printf("  - 输入 '/memory <text>' 设置Agent定制化记忆\n")
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+	
+	// 创建新对话
+	conv := history.NewConversation(userID, model)
+	
+	// 创建Agent
+	a := agent.NewAgent(cfg, log)
+	
+	// 应用命令行指定的记忆
+	if memory != "" {
+		a.SetMemory(memory)
+	}
+	
+	// 创建读取器
+	reader := bufio.NewReader(os.Stdin)
+	ctx := context.Background()
+	
+	for {
+		fmt.Print("👤 你: ")
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			log.Error("读取输入失败", err, nil)
+			return fmt.Errorf("读取输入失败: %w", err)
+		}
 		
-		// 如果指定了model，临时修改配置
-		if chatModel != "" {
-			cfg.API.Model = chatModel
+		input = strings.TrimSpace(input)
+		
+		// 检查退出命令
+		if input == "exit" || input == "quit" {
+			// 保存对话
+			if len(conv.Messages) > 0 {
+				if err := historyMgr.SaveConversation(conv); err != nil {
+					log.Error("保存对话失败", err, nil)
+					fmt.Printf("⚠️  保存对话失败: %v\n", err)
+				} else {
+					fmt.Printf("✅ 对话已保存 (ID: %s)\n", conv.ID)
+				}
+			}
+			fmt.Println("\n👋 再见!")
+			break
+		}
+		
+		if input == "" {
+			continue
+		}
+		
+		// 处理特殊命令
+		if strings.HasPrefix(input, "/") {
+			if handleCommand(input, &model, conv, historyMgr, a, log) {
+				continue
+			}
 		}
 		
 		// 记录用户输入
-		log.UserInput(question)
+		log.UserInput(input)
+		conv.AddMessage("user", input)
 		
-		fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-		fmt.Printf("🤖 AgentCLI - 智能终端助手\n")
-		fmt.Printf("📦 模型: %s\n", cfg.API.Model)
-		fmt.Printf("👤 用户: %s\n", userID)
-		fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-		fmt.Printf("📝 用户问题: %s\n", question)
-		
-		// 创建或加载对话
-		conv := history.NewConversation(userID, cfg.API.Model)
-		conv.AddMessage("user", question)
-		
-		// 创建Agent
-		a := agent.NewAgent(cfg, log)
-		
-		// 应用定制化记忆
-		if memory != "" {
-			a.SetMemory(memory)
-		}
-		
-		// 流式处理请求
-		ctx := context.Background()
-		fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-		fmt.Printf("💡 回答: ")
-		
+		// 流式输出处理请求
+		fmt.Printf("\n🤖 Agent: ")
 		var fullResponse string
-		response, err := a.ProcessRequestStream(ctx, question, func(chunk string) error {
+		response, err := a.ProcessRequestStream(ctx, input, func(chunk string) error {
 			fmt.Print(chunk)
 			fullResponse += chunk
 			return nil
@@ -157,23 +204,18 @@ var chatCmd = &cobra.Command{
 		
 		if err != nil {
 			log.Error("处理请求失败", err, nil)
-			return fmt.Errorf("处理请求失败: %w", err)
+			fmt.Printf("\n❌ 错误: %v\n\n", err)
+			continue
 		}
 		
-		fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-		
-		// 记录回复
-		conv.AddMessage("assistant", response)
+		// 记录Agent输出
 		log.AgentOutput(response)
+		conv.AddMessage("assistant", response)
 		
-		// 保存对话
-		if err := historyMgr.SaveConversation(conv); err != nil {
-			log.Error("保存对话失败", err, nil)
-			fmt.Printf("⚠️  保存对话失败: %v\n", err)
-		}
-		
-		return nil
-	},
+		fmt.Println("\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	}
+	
+	return nil
 }
 
 // interactiveCmd 交互式命令（流式输出）
@@ -183,98 +225,7 @@ var interactiveCmd = &cobra.Command{
 	Long:  "进入交互式模式，可以持续与Agent对话，支持流式输出、历史记录、模型切换等",
 	Aliases: []string{"i", "repl"},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		model := cfg.API.Model
-		if chatModel != "" {
-			model = chatModel
-		}
-		
-		fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-		fmt.Printf("🤖 AgentCLI - 交互式模式（流式输出）\n")
-		fmt.Printf("📦 模型: %s\n", model)
-		fmt.Printf("👤 用户: %s\n", userID)
-		fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-		fmt.Printf("提示:\n")
-		fmt.Printf("  - 输入 'exit' 或 'quit' 退出\n")
-		fmt.Printf("  - 输入 '/new' 开始新对话\n")
-		fmt.Printf("  - 输入 '/model' 切换模型\n")
-		fmt.Printf("  - 输入 '/history' 查看历史对话\n")
-		fmt.Printf("  - 输入 '/load <id>' 加载历史对话\n")
-		fmt.Printf("  - 输入 '/memory <text>' 设置Agent定制化记忆\n")
-		fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
-		
-		// 创建新对话
-		conv := history.NewConversation(userID, model)
-		
-		// 创建Agent
-		a := agent.NewAgent(cfg, log)
-		
-		// 创建读取器
-		reader := bufio.NewReader(os.Stdin)
-		ctx := context.Background()
-		
-		for {
-			fmt.Print("👤 你: ")
-			input, err := reader.ReadString('\n')
-			if err != nil {
-				log.Error("读取输入失败", err, nil)
-				return fmt.Errorf("读取输入失败: %w", err)
-			}
-			
-			input = strings.TrimSpace(input)
-			
-			// 检查退出命令
-			if input == "exit" || input == "quit" {
-				// 保存对话
-				if len(conv.Messages) > 0 {
-					if err := historyMgr.SaveConversation(conv); err != nil {
-						log.Error("保存对话失败", err, nil)
-						fmt.Printf("⚠️  保存对话失败: %v\n", err)
-					} else {
-						fmt.Printf("✅ 对话已保存 (ID: %s)\n", conv.ID)
-					}
-				}
-				fmt.Println("\n👋 再见!")
-				break
-			}
-			
-			if input == "" {
-				continue
-			}
-			
-			// 处理特殊命令
-			if strings.HasPrefix(input, "/") {
-				if handleCommand(input, &model, conv, historyMgr, a, log) {
-					continue
-				}
-			}
-			
-			// 记录用户输入
-			log.UserInput(input)
-			conv.AddMessage("user", input)
-			
-			// 流式输出处理请求
-			fmt.Printf("\n🤖 Agent: ")
-			var fullResponse string
-			response, err := a.ProcessRequestStream(ctx, input, func(chunk string) error {
-				fmt.Print(chunk)
-				fullResponse += chunk
-				return nil
-			})
-			
-			if err != nil {
-				log.Error("处理请求失败", err, nil)
-				fmt.Printf("\n❌ 错误: %v\n\n", err)
-				continue
-			}
-			
-			// 记录Agent输出
-			log.AgentOutput(response)
-			conv.AddMessage("assistant", response)
-			
-			fmt.Println("\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-		}
-		
-		return nil
+		return runInteractive()
 	},
 }
 
@@ -318,11 +269,19 @@ func handleCommand(input string, model *string, conv *history.Conversation, hist
 		// 列出可用模型并选择
 		availableModels := []string{
 			"gpt-4",
-			"gpt-4-turbo",
-			"gpt-3.5-turbo",
-			"claude-3-opus",
-			"claude-3-sonnet",
-			"deepseek-chat",
+			"gpt-5.2",
+			"o4-mini",
+			"o3",
+			"o3-pro",
+			"sora_image",
+			"sora-2-pro",
+			"claude-opus-4-5-20251101-thinking",
+			"claude-sonnet-4-5-20250929",
+			"claude-sonnet-4-5-20250929-thinking",
+			"gemini-3-pro-preview-thinking",
+			"gemini-3-pro-preview",
+			"gemini-3-pro-all",
+			"gemini-3-pro-image-preview",
 			"qwen-plus",
 		}
 		
@@ -448,8 +407,15 @@ func handleCommand(input string, model *string, conv *history.Conversation, hist
 		
 		memory = strings.Join(parts[1:], " ")
 		a.SetMemory(memory)
-		fmt.Printf("✅ 已设置定制化记忆: %s\n", memory)
-		log.Info("设置定制化记忆", map[string]interface{}{"memory": memory})
+		
+		// 保存memory到文件
+		if err := agent.SaveMemoryToFile(userID, memory); err != nil {
+			log.Error("保存记忆失败", err, nil)
+			fmt.Printf("⚠️  保存记忆失败: %v\n", err)
+		} else {
+			fmt.Printf("✅ 已设置并保存定制化记忆: %s\n", memory)
+			log.Info("设置定制化记忆", map[string]interface{}{"memory": memory})
+		}
 		return true
 
 	default:
