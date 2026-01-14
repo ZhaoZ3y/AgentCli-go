@@ -35,6 +35,18 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, params map[string]inte
 		return nil, fmt.Errorf("缺少命令参数")
 	}
 
+	// 处理参数列表
+	fullCommand := command
+	if argsRaw, ok := params["args"]; ok {
+		if args, ok := argsRaw.([]interface{}); ok {
+			for _, arg := range args {
+				if s, ok := arg.(string); ok {
+					fullCommand += " " + s
+				}
+			}
+		}
+	}
+
 	// 创建超时上下文
 	cmdCtx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
@@ -42,9 +54,10 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, params map[string]inte
 	// 根据操作系统选择shell
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(cmdCtx, "cmd", "/c", command)
+		// 使用PowerShell以支持更多命令（如ls, cat等）
+		cmd = exec.CommandContext(cmdCtx, "powershell", "-Command", fullCommand)
 	} else {
-		cmd = exec.CommandContext(cmdCtx, "sh", "-c", command)
+		cmd = exec.CommandContext(cmdCtx, "sh", "-c", fullCommand)
 	}
 
 	// 执行命令

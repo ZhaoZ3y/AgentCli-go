@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"strconv"
 	"strings"
 	"time"
 
@@ -194,7 +195,6 @@ func runInteractive() error {
 		conv.AddMessage("user", input)
 		
 		// 流式输出处理请求
-		fmt.Printf("\n🤖 Agent: ")
 		var fullResponse string
 		response, err := a.ProcessRequestStream(ctx, input, func(chunk string) error {
 			fmt.Print(chunk)
@@ -266,7 +266,6 @@ func handleCommand(input string, model *string, conv *history.Conversation, hist
 		return true
 
 	case "/model":
-		// 列出可用模型并选择
 		availableModels := []string{
 			"gpt-4",
 			"gpt-5.2",
@@ -284,7 +283,7 @@ func handleCommand(input string, model *string, conv *history.Conversation, hist
 			"gemini-3-pro-image-preview",
 			"qwen-plus",
 		}
-		
+	
 		fmt.Println("\n📦 可用模型列表:")
 		for i, m := range availableModels {
 			marker := " "
@@ -295,35 +294,51 @@ func handleCommand(input string, model *string, conv *history.Conversation, hist
 		}
 		fmt.Printf("\n当前模型: %s\n", *model)
 		fmt.Print("请输入模型编号或名称 (回车保持当前): ")
-		
+	
 		reader := bufio.NewReader(os.Stdin)
 		choice, _ := reader.ReadString('\n')
 		choice = strings.TrimSpace(choice)
-		
+	
 		if choice == "" {
 			fmt.Println("保持当前模型")
 			return true
 		}
-		
-		// 检查是否是数字选择
+	
 		var selectedModel string
-		if choice >= "1" && choice <= "9" {
-			idx := int(choice[0] - '1')
+	
+		// 1) 先尝试按“编号”解析（支持 >9）
+		if idx, err := strconv.Atoi(choice); err == nil {
+			idx-- // 变成 0-based
 			if idx >= 0 && idx < len(availableModels) {
 				selectedModel = availableModels[idx]
+			} else {
+				fmt.Printf("❌ 无效编号: %d (范围: 1-%d)\n", idx+1, len(availableModels))
+				return true
 			}
 		} else {
+			// 2) 再按“名称”匹配（可选：也可以做不区分大小写）
 			selectedModel = choice
 		}
-		
-		if selectedModel != "" {
-			*model = selectedModel
-			conv.Model = selectedModel
-			cfg.API.Model = selectedModel
-			a.UpdateModel(selectedModel)
-			fmt.Printf("✅ 已切换到模型: %s\n", selectedModel)
-			log.Info("切换模型", map[string]interface{}{"model": selectedModel})
+	
+		// 可选：验证名称是否在列表中，避免输入不存在的模型
+		found := false
+		for _, m := range availableModels {
+			if m == selectedModel {
+				found = true
+				break
+			}
 		}
+		if !found {
+			fmt.Printf("❌ 未知模型名称: %s\n", selectedModel)
+			return true
+		}
+	
+		*model = selectedModel
+		conv.Model = selectedModel
+		cfg.API.Model = selectedModel
+		a.UpdateModel(selectedModel)
+		fmt.Printf("✅ 已切换到模型: %s\n", selectedModel)
+		log.Info("切换模型", map[string]interface{}{"model": selectedModel})
 		return true
 
 	case "/history":

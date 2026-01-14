@@ -130,22 +130,51 @@ func (a *Agent) analyzeIntentionWithContext(ctx context.Context, userInput strin
 	fmt.Print("\n💭 thinking: ")
 	
 	// 第一步：分析用户意图 - 先获取完整的JSON响应
-	prompt := fmt.Sprintf(`分析用户意图并判断需要什么操作。
+	promptTemplate := `分析用户意图并判断需要什么操作。
 
 用户请求：%s
 
-请简洁回答以下问题（JSON格式）：
+请按照以下格式回答：
+
+<thinking>
+在这里进行深度思考，分析用户的意图，以及为了完成任务需要哪些信息或工具。
+这部分请用自然语言详细描述思考过程。
+</thinking>
+
+` + "```json" + `
 {
-  "intent": "用户想要做什么",
+  "intent": "用户想要做什么（简要总结）",
   "need_code_analysis": true/false,
   "need_image_analysis": true/false,
   "target_files": ["如果需要分析代码，列出可能相关的文件路径或模式"],
   "target_images": ["如果需要分析图片，列出图片路径"]
-}`, userInput)
+}
+` + "```"
+
+	prompt := fmt.Sprintf(promptTemplate, userInput)
 
 	response, err := a.llmClient.SimpleQuery(ctx, prompt)
 	if err != nil {
 		return "", err
+	}
+
+	// 提取思考过程
+	thinking := ""
+	startThink := strings.Index(response, "<thinking>")
+	endThink := strings.Index(response, "</thinking>")
+	if startThink != -1 && endThink != -1 {
+		thinking = response[startThink+10 : endThink]
+		thinking = strings.TrimSpace(thinking)
+		
+		// 流式输出思考过程（模拟打字效果）
+		for _, char := range thinking {
+			fmt.Print(string(char))
+			time.Sleep(5 * time.Millisecond) // 思考过程快一点
+		}
+		fmt.Print("\n")
+	} else {
+		// 如果没有找到thinking标签，尝试直接输出非JSON部分或者直接输出
+		// 但为了保持兼容，如果没找到tag，就只在后面输出intent
 	}
 
 	// 解析意图
@@ -161,20 +190,31 @@ func (a *Agent) analyzeIntentionWithContext(ctx context.Context, userInput strin
 	jsonStr := extractJSON(response)
 	if err := json.Unmarshal([]byte(jsonStr), &analysisResult); err != nil {
 		// 如果解析失败，显示原始响应并返回
-		fmt.Printf("%s\n\n", response)
+		if thinking == "" {
+			fmt.Printf("%s\n\n", response)
+		}
 		return response, nil
 	}
 
-	// 流式输出intent内容（模拟打字效果）
-	intentText := analysisResult.Intent
-	for _, char := range intentText {
-		fmt.Print(string(char))
-		time.Sleep(20 * time.Millisecond) // 模拟流式输出效果
+	// 如果有thinking，就不重复输出intent了，或者换行输出
+	if thinking == "" {
+		// 流式输出intent内容（模拟打字效果）
+		intentText := analysisResult.Intent
+		for _, char := range intentText {
+			fmt.Print(string(char))
+			time.Sleep(20 * time.Millisecond) // 模拟流式输出效果
+		}
+		fmt.Print("\n\n")
+	} else {
+		fmt.Printf("\n🎯 意图: %s\n\n", analysisResult.Intent)
 	}
-	fmt.Print("\n\n")
 
 	// 构建意图摘要
 	intentSummary := analysisResult.Intent
+	// 将思考过程也加入到摘要中，提供更多上下文
+	if thinking != "" {
+		intentSummary = fmt.Sprintf("思考过程：%s\n\n意图：%s", thinking, intentSummary)
+	}
 
 	// 如果需要分析代码文件，将文件信息融入到意图描述中
 	if analysisResult.NeedCodeAnalysis && len(analysisResult.TargetFiles) > 0 {
@@ -194,15 +234,26 @@ func (a *Agent) analyzeIntentionWithContext(ctx context.Context, userInput strin
 			if err == nil {
 				for _, filePath := range validFiles {
 					result, err := readFileTool.Execute(ctx, map[string]interface{}{
-						"path": filePath,
+						"filepath": filePath,
 					})
 					if err == nil {
 						if a.logger != nil {
 							a.logger.ThinkingProcess("读取代码文件", fmt.Sprintf("文件: %s", filePath))
 						}
-						intentSummary += fmt.Sprintf("\n  - 已读取: %s", filePath)
+						
+						// 提取文件内容
+						if resultMap, ok := result.(map[string]interface{}); ok {
+							if content, ok := resultMap["content"].(string); ok {
+								// 简单的截断保护，避免上下文溢出 (例如保留前20000字符)
+								if len(content) > 20000 {
+									content = content[:20000] + "\n... (文件内容过长，已截断)"
+								}
+								intentSummary += fmt.Sprintf("\n\n文件 %s 的内容:\n```\n%s\n```\n", filePath, content)
+							}
+						} else {
+							intentSummary += fmt.Sprintf("\n  - 已读取: %s (但无法获取内容)", filePath)
+						}
 					}
-					_ = result
 				}
 			}
 		}
@@ -226,7 +277,7 @@ func (a *Agent) analyzeIntentionWithContext(ctx context.Context, userInput strin
 			if err == nil {
 				for _, imagePath := range validImages {
 					result, err := recognizeTool.Execute(ctx, map[string]interface{}{
-						"path": imagePath,
+						"filepath": imagePath,
 					})
 					if err == nil {
 						if a.logger != nil {

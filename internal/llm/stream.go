@@ -56,7 +56,10 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, onChunk fun
 	req.Header.Set("Accept", "text/event-stream")
 
 	// 发送请求
-	resp, err := c.client.Do(req)
+	// 流式请求可能持续很长时间，创建一个没有超时的客户端副本
+	streamClient := *c.client
+	streamClient.Timeout = 0
+	resp, err := streamClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("发送请求失败: %w", err)
 	}
