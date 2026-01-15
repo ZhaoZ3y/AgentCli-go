@@ -71,3 +71,15 @@ func LoadMemoryFromFile(userID string) (string, error) {
 
 	return store.Memory, nil
 }
+
+// DeleteMemoryFromFile 删除记忆文件
+func DeleteMemoryFromFile(userID string) error {
+	filePath := filepath.Join("memory", fmt.Sprintf("%s.json", userID))
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		return nil
+	}
+	if err := os.Remove(filePath); err != nil {
+		return fmt.Errorf("删除记忆文件失败: %w", err)
+	}
+	return nil
+}

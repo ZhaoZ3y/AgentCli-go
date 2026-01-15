@@ -30,6 +30,14 @@ func (t *WriteCodeTool) Description() string {
 	return "写入代码到文件。参数: filepath(文件路径), code(代码内容), language(编程语言)"
 }
 
+func (t *WriteCodeTool) GetParams() map[string]string {
+	return map[string]string{
+		"filepath": "要写入的文件路径",
+		"code":     "要写入的代码内容",
+		"language": "编程语言(可选，可从文件扩展名推断)",
+	}
+}
+
 func (t *WriteCodeTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 	// 获取参数 - 支持filepath和file_path两种参数名
 	filePath, ok := params["filepath"].(string)

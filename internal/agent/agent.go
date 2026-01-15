@@ -9,17 +9,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
 // Agent 代理
 type Agent struct {
-	llmClient    *llm.Client
-	toolRegistry *tools.ToolRegistry
-	config       *config.Config
-	logger       *logger.Logger
-	memory       string // 定制化记忆
+	llmClient      *llm.Client
+	toolRegistry   *tools.ToolRegistry
+	config         *config.Config
+	logger         *logger.Logger
+	memory         string // 定制化记忆
+	contextMu      sync.Mutex
+	contextEntries []string
 }
 
 // NewAgent 创建代理
@@ -87,20 +91,21 @@ func (a *Agent) UpdateModel(model string) {
 	}
 }
 
-// ProcessRequest 处理用户请求
-func (a *Agent) ProcessRequest(ctx context.Context, userInput string) (string, error) {
+// ProcessRequest 处理用户请求（带对话历史）
+func (a *Agent) ProcessRequest(ctx context.Context, userInput string, conversationHistory []llm.Message) (string, error) {
+	a.resetContextLog()
 	fmt.Printf("\n🤔 开始深度思考用户意图...\n")
 
-	// 第一步：分析用户意图
-	intention, err := a.analyzeIntention(ctx, userInput)
+	// 第一步：分析用户意图（带历史上下文）
+	intention, err := a.analyzeIntention(ctx, userInput, conversationHistory)
 	if err != nil {
 		return "", fmt.Errorf("分析意图失败: %w", err)
 	}
 
 	fmt.Printf("📊 意图分析: %s\n", intention)
 
-	// 第二步：使用DAG进行深度思考和规划
-	result, err := a.executeWithDAG(ctx, userInput, intention)
+	// 第二步：使用DAG进行深度思考和规划（带历史上下文）
+	result, err := a.executeWithDAG(ctx, userInput, intention, conversationHistory)
 	if err != nil {
 		return "", fmt.Errorf("执行失败: %w", err)
 	}
@@ -108,27 +113,50 @@ func (a *Agent) ProcessRequest(ctx context.Context, userInput string) (string, e
 	return result, nil
 }
 
-// analyzeIntention 分析用户意图
-func (a *Agent) analyzeIntention(ctx context.Context, userInput string) (string, error) {
+// analyzeIntention 分析用户意图（带对话历史）
+func (a *Agent) analyzeIntention(ctx context.Context, userInput string, conversationHistory []llm.Message) (string, error) {
 	toolsList := a.getToolsDescription()
 
-	prompt := fmt.Sprintf(`你是一个智能助手，请分析以下用户请求的意图，并确定需要使用哪些工具。
+	systemPrompt := fmt.Sprintf(`你是一个智能助手，请分析用户请求的意图，并确定需要使用哪些工具。
+当前系统：%s。请仅给出匹配该系统的命令与操作。
+%s
 
 可用工具：
 %s
 
-用户请求：%s
+请用一句话简洁地描述用户意图和需要执行的操作。`, a.osHint(), a.toolUsagePolicy(), toolsList)
 
-请用一句话简洁地描述用户意图和需要执行的操作。`, toolsList, userInput)
+	// 构建消息列表：系统提示 + 对话历史 + 当前用户输入
+	messages := []llm.Message{
+		{Role: "system", Content: systemPrompt},
+	}
 
-	return a.llmClient.SimpleQuery(ctx, prompt)
+	// 添加对话历史（如果有）
+	messages = append(messages, conversationHistory...)
+
+	// 添加当前用户输入
+	messages = append(messages, llm.Message{
+		Role:    "user",
+		Content: userInput,
+	})
+
+	resp, err := a.llmClient.Chat(ctx, messages, nil, "")
+	if err != nil {
+		return "", err
+	}
+
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("响应中没有消息")
+	}
+
+	return resp.Choices[0].Message.Content, nil
 }
 
-// analyzeIntentionWithContext 分析用户意图并智能读取相关文件
-func (a *Agent) analyzeIntentionWithContext(ctx context.Context, userInput string) (string, error) {
+// analyzeIntentionWithContext 分析用户意图并智能读取相关文件（带对话历史）
+func (a *Agent) analyzeIntentionWithContext(ctx context.Context, userInput string, conversationHistory []llm.Message) (string, error) {
 	// 显示思考过程
 	fmt.Print("\n💭 thinking: ")
-	
+
 	// 第一步：分析用户意图 - 先获取完整的JSON响应
 	promptTemplate := `分析用户意图并判断需要什么操作。
 
@@ -151,12 +179,30 @@ func (a *Agent) analyzeIntentionWithContext(ctx context.Context, userInput strin
 }
 ` + "```"
 
-	prompt := fmt.Sprintf(promptTemplate, userInput)
+	// 构建消息列表：系统提示 + 对话历史 + 当前用户输入
+	messages := []llm.Message{
+		{Role: "system", Content: "你是一个智能助手，擅长分析用户意图并确定需要的操作。\n当前系统：" + a.osHint() + "。请仅给出匹配该系统的命令与操作。\n" + a.toolUsagePolicy()},
+	}
 
-	response, err := a.llmClient.SimpleQuery(ctx, prompt)
+	// 添加对话历史
+	messages = append(messages, conversationHistory...)
+
+	// 添加当前用户输入
+	messages = append(messages, llm.Message{
+		Role:    "user",
+		Content: fmt.Sprintf(promptTemplate, userInput),
+	})
+
+	resp, err := a.llmClient.Chat(ctx, messages, nil, "")
 	if err != nil {
 		return "", err
 	}
+
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("响应中没有消息")
+	}
+
+	response := resp.Choices[0].Message.Content
 
 	// 提取思考过程
 	thinking := ""
@@ -165,7 +211,7 @@ func (a *Agent) analyzeIntentionWithContext(ctx context.Context, userInput strin
 	if startThink != -1 && endThink != -1 {
 		thinking = response[startThink+10 : endThink]
 		thinking = strings.TrimSpace(thinking)
-		
+
 		// 流式输出思考过程（模拟打字效果）
 		for _, char := range thinking {
 			fmt.Print(string(char))
@@ -189,6 +235,11 @@ func (a *Agent) analyzeIntentionWithContext(ctx context.Context, userInput strin
 	// 尝试从响应中提取JSON
 	jsonStr := extractJSON(response)
 	if err := json.Unmarshal([]byte(jsonStr), &analysisResult); err != nil {
+		if thinking != "" {
+			a.appendContextEntry("deep_thinking", thinking)
+		} else if strings.TrimSpace(response) != "" {
+			a.appendContextEntry("deep_thinking", response)
+		}
 		// 如果解析失败，显示原始响应并返回
 		if thinking == "" {
 			fmt.Printf("%s\n\n", response)
@@ -216,6 +267,12 @@ func (a *Agent) analyzeIntentionWithContext(ctx context.Context, userInput strin
 		intentSummary = fmt.Sprintf("思考过程：%s\n\n意图：%s", thinking, intentSummary)
 	}
 
+	thinkingForContext := strings.TrimSpace(thinking)
+	if thinkingForContext == "" {
+		thinkingForContext = strings.TrimSpace(analysisResult.Intent)
+	}
+	a.appendContextEntry("deep_thinking", thinkingForContext)
+
 	// 如果需要分析代码文件，将文件信息融入到意图描述中
 	if analysisResult.NeedCodeAnalysis && len(analysisResult.TargetFiles) > 0 {
 		// 过滤掉空字符串
@@ -225,10 +282,10 @@ func (a *Agent) analyzeIntentionWithContext(ctx context.Context, userInput strin
 				validFiles = append(validFiles, f)
 			}
 		}
-		
+
 		if len(validFiles) > 0 {
 			intentSummary += "，需要分析以下代码文件: " + strings.Join(validFiles, ", ")
-			
+
 			// 实际读取文件
 			readFileTool, err := a.toolRegistry.Get("read_file")
 			if err == nil {
@@ -240,7 +297,7 @@ func (a *Agent) analyzeIntentionWithContext(ctx context.Context, userInput strin
 						if a.logger != nil {
 							a.logger.ThinkingProcess("读取代码文件", fmt.Sprintf("文件: %s", filePath))
 						}
-						
+
 						// 提取文件内容
 						if resultMap, ok := result.(map[string]interface{}); ok {
 							if content, ok := resultMap["content"].(string); ok {
@@ -268,10 +325,10 @@ func (a *Agent) analyzeIntentionWithContext(ctx context.Context, userInput strin
 				validImages = append(validImages, img)
 			}
 		}
-		
+
 		if len(validImages) > 0 {
 			intentSummary += "，需要分析以下图片: " + strings.Join(validImages, ", ")
-			
+
 			// 实际识别图片
 			recognizeTool, err := a.toolRegistry.Get("recognize_image")
 			if err == nil {
@@ -294,8 +351,8 @@ func (a *Agent) analyzeIntentionWithContext(ctx context.Context, userInput strin
 	return intentSummary, nil
 }
 
-// executeWithDAG 使用DAG执行任务
-func (a *Agent) executeWithDAG(ctx context.Context, userInput, intention string) (string, error) {
+// executeWithDAG 使用DAG执行任务（带对话历史）
+func (a *Agent) executeWithDAG(ctx context.Context, userInput, intention string, conversationHistory []llm.Message) (string, error) {
 	// 创建DAG
 	d := dag.NewDAG(
 		a.config.DAG.MaxDepth,
@@ -308,6 +365,7 @@ func (a *Agent) executeWithDAG(ctx context.Context, userInput, intention string)
 	thinkNode := dag.NewNode("think", "深度思考", dag.NodeTypeThink)
 	thinkNode.SetInput("user_input", userInput)
 	thinkNode.SetInput("intention", intention)
+	thinkNode.SetInput("conversation_history", conversationHistory)
 	thinkNode.SetHandler(&ThinkHandler{agent: a})
 	d.AddNode(thinkNode)
 
@@ -354,6 +412,21 @@ func (a *Agent) getToolsDescription() string {
 	return strings.Join(descriptions, "\n")
 }
 
+func (a *Agent) osHint() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "Windows（使用 PowerShell 命令）"
+	case "darwin":
+		return "macOS（使用 sh 语法）"
+	default:
+		return "Linux（使用 sh 语法）"
+	}
+}
+
+func (a *Agent) toolUsagePolicy() string {
+	return "当任务可通过工具完成时，必须调用工具执行；不要让用户手动运行命令。仅在确实无法使用工具时才向用户提问或解释限制。"
+}
+
 func contains(slice []string, item string) bool {
 	for _, s := range slice {
 		if s == item {
@@ -372,15 +445,20 @@ func (h *ThinkHandler) Execute(ctx context.Context, input map[string]interface{}
 	userInput := input["user_input"].(string)
 	intention := input["intention"].(string)
 
+	// 获取对话历史（如果有）
+	var conversationHistory []llm.Message
+	if history, ok := input["conversation_history"].([]llm.Message); ok {
+		conversationHistory = history
+	}
+
 	toolsList := h.agent.getToolsDescription()
 
-	prompt := fmt.Sprintf(`基于用户请求和意图分析，请深度思考如何完成任务。
+	systemPrompt := fmt.Sprintf(`基于用户请求和意图分析，请深度思考如何完成任务。
+当前系统：%s。请确保涉及命令时与该系统匹配。
+%s
 
 可用工具：
 %s
-
-用户请求：%s
-意图分析：%s
 
 请详细分析：
 1. 需要执行哪些步骤
@@ -393,16 +471,40 @@ func (h *ThinkHandler) Execute(ctx context.Context, input map[string]interface{}
   "steps": ["步骤1", "步骤2", ...],
   "tools_needed": ["tool1", "tool2", ...],
   "reasoning": "你的推理过程"
-}`, toolsList, userInput, intention)
+}`, h.agent.osHint(), h.agent.toolUsagePolicy(), toolsList)
 
-	response, err := h.agent.llmClient.SimpleQuery(ctx, prompt)
+	// 构建消息列表
+	messages := []llm.Message{
+		{Role: "system", Content: systemPrompt},
+	}
+
+	// 添加对话历史
+	messages = append(messages, conversationHistory...)
+
+	// 添加当前任务
+	messages = append(messages, llm.Message{
+		Role:    "user",
+		Content: fmt.Sprintf("用户请求：%s\n意图分析：%s", userInput, intention),
+	})
+
+	resp, err := h.agent.llmClient.Chat(ctx, messages, nil, "")
 	if err != nil {
 		return nil, err
 	}
 
+	response := ""
+	if len(resp.Choices) > 0 {
+		response = resp.Choices[0].Message.Content
+	}
+
+	if response != "" {
+		h.agent.appendContextEntry("deep_thinking", response)
+	}
+
 	return map[string]interface{}{
-		"thinking": response,
-		"user_input": userInput,
+		"thinking":             response,
+		"user_input":           userInput,
+		"conversation_history": conversationHistory,
 	}, nil
 }
 
@@ -415,7 +517,10 @@ func (h *DecisionHandler) Execute(ctx context.Context, input map[string]interfac
 	thinking := input["thinking"].(string)
 	userInput := input["user_input"].(string)
 
-	prompt := fmt.Sprintf(`基于以下思考结果，生成具体的工具调用计划。
+	prompt := fmt.Sprintf(`当前系统：%s。请仅给出匹配该系统的命令与操作。
+%s
+
+基于以下思考结果，生成具体的工具调用计划。
 
 思考结果：
 %s
@@ -433,7 +538,7 @@ func (h *DecisionHandler) Execute(ctx context.Context, input map[string]interfac
   }
 ]
 
-如果不需要使用工具，返回空数组 []`, thinking, userInput)
+如果不需要使用工具，返回空数组 []`, h.agent.osHint(), h.agent.toolUsagePolicy(), thinking, userInput)
 
 	response, err := h.agent.llmClient.SimpleQuery(ctx, prompt)
 	if err != nil {
@@ -441,7 +546,7 @@ func (h *DecisionHandler) Execute(ctx context.Context, input map[string]interfac
 	}
 
 	return map[string]interface{}{
-		"plan": response,
+		"plan":       response,
 		"user_input": userInput,
 	}, nil
 }
@@ -453,7 +558,7 @@ type ToolHandler struct {
 
 func (h *ToolHandler) Execute(ctx context.Context, input map[string]interface{}) (map[string]interface{}, error) {
 	planStr := input["plan"].(string)
-	
+
 	// 提取JSON部分
 	planStr = extractJSON(planStr)
 
@@ -479,6 +584,7 @@ func (h *ToolHandler) Execute(ctx context.Context, input map[string]interface{})
 
 		fmt.Printf("⚙️  执行工具: %s\n", call.Tool)
 		result, err := tool.Execute(ctx, call.Params)
+		h.agent.recordToolCallContext(call.Tool, call.Params, result, err)
 		if err != nil {
 			results = append(results, fmt.Sprintf("❌ 工具 %s 执行失败: %v", call.Tool, err))
 		} else {
@@ -488,7 +594,7 @@ func (h *ToolHandler) Execute(ctx context.Context, input map[string]interface{})
 	}
 
 	return map[string]interface{}{
-		"results": results,
+		"results":    results,
 		"user_input": input["user_input"],
 	}, nil
 }
@@ -506,7 +612,8 @@ func (h *SummaryHandler) Execute(ctx context.Context, input map[string]interface
 
 	if len(results) == 0 {
 		// 如果没有工具调用，直接回答
-		response, err := h.agent.llmClient.SimpleQuery(ctx, userInput)
+		prompt := fmt.Sprintf("当前系统：%s。请仅给出匹配该系统的命令与操作。\n%s\n\n用户请求：%s", h.agent.osHint(), h.agent.toolUsagePolicy(), userInput)
+		response, err := h.agent.llmClient.SimpleQuery(ctx, prompt)
 		if err != nil {
 			return nil, err
 		}
@@ -515,14 +622,17 @@ func (h *SummaryHandler) Execute(ctx context.Context, input map[string]interface
 		}, nil
 	}
 
-	prompt := fmt.Sprintf(`基于以下工具执行结果，为用户生成一个友好的总结回复。
+	prompt := fmt.Sprintf(`当前系统：%s。请仅给出匹配该系统的命令与操作。
+%s
+
+基于以下工具执行结果，为用户生成一个友好的总结回复。
 
 用户请求：%s
 
 工具执行结果：
 %s
 
-请用自然语言总结执行结果，告诉用户任务是否完成以及具体的结果。`, userInput, resultsStr)
+请用自然语言总结执行结果，告诉用户任务是否完成以及具体的结果。`, h.agent.osHint(), h.agent.toolUsagePolicy(), userInput, resultsStr)
 
 	response, err := h.agent.llmClient.SimpleQuery(ctx, prompt)
 	if err != nil {

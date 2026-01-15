@@ -18,14 +18,14 @@ import (
 )
 
 var (
-	configFile   string
-	chatModel    string
-	sessionID    string
-	cfg          *config.Config
-	historyMgr   *history.Manager
-	log          *logger.Logger
-	userID       string
-	memory       string // Agent定制化记忆
+	configFile string
+	chatModel  string
+	sessionID  string
+	cfg        *config.Config
+	historyMgr *history.Manager
+	log        *logger.Logger
+	userID     string
+	memory     string // Agent定制化记忆
 )
 
 // rootCmd 根命令
@@ -113,7 +113,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&sessionID, "session", "s", "", "会话ID")
 	rootCmd.PersistentFlags().StringVarP(&chatModel, "model", "m", "", "指定使用的模型")
 	rootCmd.PersistentFlags().StringVarP(&memory, "memory", "", "", "Agent定制化记忆")
-	
+
 	// 添加子命令
 	rootCmd.AddCommand(versionCmd)
 }
@@ -124,7 +124,7 @@ func runInteractive() error {
 	if chatModel != "" {
 		model = chatModel
 	}
-	
+
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 	fmt.Printf("🤖 AgentCLI - 交互式模式\n")
 	fmt.Printf("📦 模型: %s\n", model)
@@ -137,23 +137,24 @@ func runInteractive() error {
 	fmt.Printf("  - 输入 '/history' 查看历史对话\n")
 	fmt.Printf("  - 输入 '/load <id>' 加载历史对话\n")
 	fmt.Printf("  - 输入 '/memory <text>' 设置Agent定制化记忆\n")
+	fmt.Printf("  - 输入 '/memory clear' 删除定制化记忆\n")
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
-	
+
 	// 创建新对话
 	conv := history.NewConversation(userID, model)
-	
+
 	// 创建Agent
 	a := agent.NewAgent(cfg, log)
-	
+
 	// 应用命令行指定的记忆
 	if memory != "" {
 		a.SetMemory(memory)
 	}
-	
+
 	// 创建读取器
 	reader := bufio.NewReader(os.Stdin)
 	ctx := context.Background()
-	
+
 	for {
 		fmt.Print("👤 你: ")
 		input, err := reader.ReadString('\n')
@@ -161,9 +162,9 @@ func runInteractive() error {
 			log.Error("读取输入失败", err, nil)
 			return fmt.Errorf("读取输入失败: %w", err)
 		}
-		
+
 		input = strings.TrimSpace(input)
-		
+
 		// 检查退出命令
 		if input == "exit" || input == "quit" {
 			// 保存对话
@@ -178,51 +179,63 @@ func runInteractive() error {
 			fmt.Println("\n👋 再见!")
 			break
 		}
-		
+
 		if input == "" {
 			continue
 		}
-		
+
 		// 处理特殊命令
 		if strings.HasPrefix(input, "/") {
 			if handleCommand(input, &model, conv, historyMgr, a, log) {
 				continue
 			}
 		}
-		
+
 		// 记录用户输入
 		log.UserInput(input)
 		conv.AddMessage("user", input)
-		
-		// 流式输出处理请求
+
+		// 获取对话历史（不包括刚添加的用户消息，因为会在Agent内部处理）
+		conversationHistory := conv.ToLLMMessages()
+		// 移除最后一条消息（刚添加的用户输入），因为会作为参数传递
+		if len(conversationHistory) > 0 {
+			conversationHistory = conversationHistory[:len(conversationHistory)-1]
+		}
+
+		// 流式输出处理请求（带对话历史）
 		var fullResponse string
-		response, err := a.ProcessRequestStream(ctx, input, func(chunk string) error {
+		response, err := a.ProcessRequestStream(ctx, input, conversationHistory, func(chunk string) error {
 			fmt.Print(chunk)
 			fullResponse += chunk
 			return nil
 		})
-		
+
 		if err != nil {
 			log.Error("处理请求失败", err, nil)
 			fmt.Printf("\n❌ 错误: %v\n\n", err)
 			continue
 		}
-		
+
+		contextLog := a.ConsumeContextLog()
+		if contextLog != "" {
+			conv.AddMessage("assistant", "[context]\n"+contextLog)
+		}
+
 		// 记录Agent输出
 		log.AgentOutput(response)
 		conv.AddMessage("assistant", response)
-		
+
 		fmt.Println("\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	}
-	
+
 	return nil
 }
 
 // interactiveCmd 交互式命令（流式输出）
 var interactiveCmd = &cobra.Command{
-	Use:   "interactive",
-	Short: "进入交互式对话模式（流式输出）",
-	Long:  "进入交互式模式，可以持续与Agent对话，支持流式输出、历史记录、模型切换等",
+	Use:     "interactive",
+	Short:   "进入交互式对话模式（流式输出）",
+	Long:    "进入交互式模式，可以持续与Agent对话，支持流式输出、历史记录、模型切换等",
 	Aliases: []string{"i", "repl"},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runInteractive()
@@ -283,7 +296,7 @@ func handleCommand(input string, model *string, conv *history.Conversation, hist
 			"gemini-3-pro-image-preview",
 			"qwen-plus",
 		}
-	
+
 		fmt.Println("\n📦 可用模型列表:")
 		for i, m := range availableModels {
 			marker := " "
@@ -294,18 +307,18 @@ func handleCommand(input string, model *string, conv *history.Conversation, hist
 		}
 		fmt.Printf("\n当前模型: %s\n", *model)
 		fmt.Print("请输入模型编号或名称 (回车保持当前): ")
-	
+
 		reader := bufio.NewReader(os.Stdin)
 		choice, _ := reader.ReadString('\n')
 		choice = strings.TrimSpace(choice)
-	
+
 		if choice == "" {
 			fmt.Println("保持当前模型")
 			return true
 		}
-	
+
 		var selectedModel string
-	
+
 		// 1) 先尝试按“编号”解析（支持 >9）
 		if idx, err := strconv.Atoi(choice); err == nil {
 			idx-- // 变成 0-based
@@ -319,7 +332,7 @@ func handleCommand(input string, model *string, conv *history.Conversation, hist
 			// 2) 再按“名称”匹配（可选：也可以做不区分大小写）
 			selectedModel = choice
 		}
-	
+
 		// 可选：验证名称是否在列表中，避免输入不存在的模型
 		found := false
 		for _, m := range availableModels {
@@ -332,7 +345,7 @@ func handleCommand(input string, model *string, conv *history.Conversation, hist
 			fmt.Printf("❌ 未知模型名称: %s\n", selectedModel)
 			return true
 		}
-	
+
 		*model = selectedModel
 		conv.Model = selectedModel
 		cfg.API.Model = selectedModel
@@ -372,23 +385,23 @@ func handleCommand(input string, model *string, conv *history.Conversation, hist
 			fmt.Printf("❌ 加载对话失败: %v\n", err)
 			return true
 		}
-		
+
 		// 保存当前对话
 		if len(conv.Messages) > 0 {
 			historyMgr.SaveConversation(conv)
 		}
-		
+
 		*conv = *loadedConv
 		*model = conv.Model
 		cfg.API.Model = conv.Model
 		a.UpdateModel(conv.Model)
-		
+
 		fmt.Printf("✅ 已加载对话 (ID: %s, 消息数: %d)\n", conv.ID, len(conv.Messages))
 		log.Info("加载历史对话", map[string]interface{}{
 			"conversation_id": conv.ID,
-			"message_count": len(conv.Messages),
+			"message_count":   len(conv.Messages),
 		})
-		
+
 		// 显示最近几条消息
 		recent := conv.GetRecentMessages(6)
 		if len(recent) > 0 {
@@ -416,13 +429,27 @@ func handleCommand(input string, model *string, conv *history.Conversation, hist
 				fmt.Printf("📝 当前定制化记忆: %s\n", memory)
 			}
 			fmt.Println("用法: /memory <定制化文本>")
+			fmt.Println("用法: /memory clear  (删除定制化记忆)")
 			fmt.Println("例如: /memory 你是一个专业的Go语言开发专家，擅长性能优化")
 			return true
 		}
-		
+
+		if strings.EqualFold(parts[1], "clear") || strings.EqualFold(parts[1], "delete") {
+			memory = ""
+			a.SetMemory("")
+			if err := agent.DeleteMemoryFromFile(userID); err != nil {
+				log.Error("删除记忆失败", err, nil)
+				fmt.Printf("⚠️  删除记忆失败: %v\n", err)
+			} else {
+				fmt.Println("✅ 已删除定制化记忆")
+				log.Info("删除定制化记忆", nil)
+			}
+			return true
+		}
+
 		memory = strings.Join(parts[1:], " ")
 		a.SetMemory(memory)
-		
+
 		// 保存memory到文件
 		if err := agent.SaveMemoryToFile(userID, memory); err != nil {
 			log.Error("保存记忆失败", err, nil)

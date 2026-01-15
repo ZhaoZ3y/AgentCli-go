@@ -30,6 +30,12 @@ func (t *ReadFileTool) Description() string {
 	return "读取文件内容。参数: filepath(文件路径)"
 }
 
+func (t *ReadFileTool) GetParams() map[string]string {
+	return map[string]string{
+		"filepath": "要读取的文件路径",
+	}
+}
+
 func (t *ReadFileTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 	// 获取参数
 	filePath, ok := params["filepath"].(string)

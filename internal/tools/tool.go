@@ -9,6 +9,7 @@ import (
 type Tool interface {
 	Name() string
 	Description() string
+	GetParams() map[string]string // 返回参数名称和描述的映射
 	Execute(ctx context.Context, params map[string]interface{}) (interface{}, error)
 }
 

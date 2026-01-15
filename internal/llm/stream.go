@@ -20,8 +20,9 @@ type StreamResponse struct {
 	Choices []struct {
 		Index int `json:"index"`
 		Delta struct {
-			Role    string `json:"role,omitempty"`
-			Content string `json:"content,omitempty"`
+			Role      string     `json:"role,omitempty"`
+			Content   string     `json:"content,omitempty"`
+			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason,omitempty"`
 	} `json:"choices"`
@@ -29,11 +30,23 @@ type StreamResponse struct {
 
 // ChatStream 发送流式聊天请求
 func (c *Client) ChatStream(ctx context.Context, messages []Message, onChunk func(content string) error) (string, error) {
+	return c.ChatStreamWithTools(ctx, messages, nil, "", onChunk)
+}
+
+// ChatStreamWithTools 发送带工具的流式聊天请求
+func (c *Client) ChatStreamWithTools(ctx context.Context, messages []Message, tools []Tool, toolChoice string, onChunk func(content string) error) (string, error) {
 	// 构建请求
 	reqBody := map[string]interface{}{
 		"model":    c.Model,
 		"messages": messages,
 		"stream":   true,
+	}
+	
+	if len(tools) > 0 {
+		reqBody["tools"] = tools
+		if toolChoice != "" {
+			reqBody["tool_choice"] = toolChoice
+		}
 	}
 
 	jsonData, err := json.Marshal(reqBody)

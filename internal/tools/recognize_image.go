@@ -38,6 +38,12 @@ func (t *RecognizeImageTool) Description() string {
 	return "识别图片内容。参数: filepath(图片文件路径)"
 }
 
+func (t *RecognizeImageTool) GetParams() map[string]string {
+	return map[string]string{
+		"filepath": "要识别的图片文件路径",
+	}
+}
+
 func (t *RecognizeImageTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 	// 获取参数
 	filePath, ok := params["filepath"].(string)

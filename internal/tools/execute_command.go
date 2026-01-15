@@ -25,7 +25,17 @@ func (t *ExecuteCommandTool) Name() string {
 }
 
 func (t *ExecuteCommandTool) Description() string {
-	return "执行系统命令。参数: command(命令), args(参数列表,可选)"
+	if runtime.GOOS == "windows" {
+		return "执行系统命令（Windows 使用 PowerShell 语法）。示例: Get-ChildItem -Recurse -Filter hello.py, Get-Content .\\file.txt, Select-String -Pattern \"foo\" -Path .\\ -Recurse。参数: command(命令), args(参数列表,可选)"
+	}
+	return "执行系统命令（Unix 使用 sh -c 语法）。参数: command(命令), args(参数列表,可选)"
+}
+
+func (t *ExecuteCommandTool) GetParams() map[string]string {
+	return map[string]string{
+		"command": "要执行的系统命令（Windows: PowerShell 语法）",
+		"args":    "命令参数列表(可选)",
+	}
 }
 
 func (t *ExecuteCommandTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
