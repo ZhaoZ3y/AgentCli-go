@@ -1,0 +1,75 @@
+# Agent CLI Configuration
+# API配置
+api:
+  # API Key (可以使用OpenAI或兼容的API)
+  openai_key: ""
+  # API Base URL (可选，用于自定义API端点)
+  base_url: ""
+  # 模型名称
+  model: "gpt-5.2"
+  # 请求超时时间（秒）
+  timeout: 600
+
+# 工具配置
+tools:
+  # 启用的工具列表
+  enabled:
+    - write_code
+    - read_file
+    - recognize_image
+    - execute_command
+    - search_web
+
+  # 代码写入工具配置
+  write_code:
+    max_lines: 1000
+    supported_languages:
+      - go
+      - python
+      - javascript
+      - typescript
+      - java
+      - c
+      - cpp
+
+  # 文件读取工具配置
+  read_file:
+    max_size_mb: 10
+    allowed_extensions:
+      - .txt
+      - .md
+      - .go
+      - .py
+      - .js
+      - .ts
+      - .json
+      - .yaml
+      - .yml
+
+  # 图片识别工具配置
+  recognize_image:
+    max_size_mb: 20
+    supported_formats:
+      - jpg
+      - jpeg
+      - png
+      - gif
+      - bmp
+      - webp
+
+# DAG思考引擎配置
+dag:
+  # 最大思考深度
+  max_depth: 5
+  # 并行处理节点数
+  parallel_nodes: 3
+  # 思考超时时间（秒）
+  timeout: 300
+  # 是否启用详细日志
+  verbose: true
+
+# 日志配置
+logging:
+  level: info
+  output: stdout
+  format: text

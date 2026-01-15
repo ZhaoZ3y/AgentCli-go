@@ -43,4 +43,8 @@ agentcli.exe
 logs/
 
 # History
-history/
+histories/
+# Memory
+memories/
+
+TODO.md
