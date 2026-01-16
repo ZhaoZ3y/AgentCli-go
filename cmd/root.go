@@ -67,7 +67,7 @@ var rootCmd = &cobra.Command{
 		}
 
 		// 初始化历史记录管理器（当前目录下）
-		historyDir := "history"
+		historyDir := "histories"
 		historyMgr = history.NewManager(historyDir)
 		if err := historyMgr.Init(); err != nil {
 			return fmt.Errorf("初始化历史记录失败: %w", err)

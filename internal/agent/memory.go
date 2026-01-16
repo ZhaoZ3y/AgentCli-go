@@ -18,7 +18,7 @@ type MemoryStore struct {
 // SaveMemoryToFile 保存记忆到文件
 func SaveMemoryToFile(userID, memory string) error {
 	// 创建memory目录
-	memoryDir := "memory"
+	memoryDir := "memories"
 	if err := os.MkdirAll(memoryDir, 0755); err != nil {
 		return fmt.Errorf("创建memory目录失败: %w", err)
 	}
